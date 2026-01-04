@@ -6,6 +6,13 @@
     Separation of Code (Public) and Data (Private).
 #>
 #Requires -Version 5.1
+<#
+PSScriptAnalyzerSettings = @{
+    ExcludeRules = @('PSAvoidUsingWriteHost')
+}
+#>
+
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingWriteHost','',Justification='Console UI output')]
 
 [CmdletBinding(SupportsShouldProcess=$true, ConfirmImpact='Medium')]
 param(
@@ -95,6 +102,50 @@ function Get-GitPromptScriptRoot {
     if ($MyInvocation.MyCommand.Path) { return (Split-Path -Parent $MyInvocation.MyCommand.Path) }
     return (Get-Location).Path
 }
+function Get-ScriptRepoRoot {
+    if ($script:Config -and $script:Config.ScriptRepoPath) { return $script:Config.ScriptRepoPath }
+    if ($script:Config -and $script:Config.RepoPath) { return $script:Config.RepoPath }
+    return (Get-GitPromptScriptRoot)
+}
+
+function Get-PromptsRepoRoot {
+    if ($script:Config -and $script:Config.PromptsRepoPath) { return $script:Config.PromptsRepoPath }
+    if ($script:Config -and $script:Config.RepoPath) { return $script:Config.RepoPath }
+    return (Get-GitPromptScriptRoot)
+}
+
+function Get-CodeRepoRoot {
+    if ($script:Config -and $script:Config.CodeRepoPath) { return $script:Config.CodeRepoPath }
+    return $null
+}
+
+function ConvertTo-GitPromptConfig {
+    param([object]$cfg)
+    if (-not $cfg) { return $null }
+    if (-not ($cfg.PSObject.Properties.Name -contains "RepoPath")) {
+        $cfg | Add-Member -NotePropertyName RepoPath -NotePropertyValue (Get-GitPromptScriptRoot)
+    }
+    if (-not ($cfg.PSObject.Properties.Name -contains "ScriptRepoPath")) {
+        $cfg | Add-Member -NotePropertyName ScriptRepoPath -NotePropertyValue $cfg.RepoPath
+    }
+    if (-not ($cfg.PSObject.Properties.Name -contains "PromptsRepoPath")) {
+        $cfg | Add-Member -NotePropertyName PromptsRepoPath -NotePropertyValue $cfg.RepoPath
+    }
+    if (-not ($cfg.PSObject.Properties.Name -contains "CodeRepoPath")) {
+        $cfg | Add-Member -NotePropertyName CodeRepoPath -NotePropertyValue ""
+    }
+    if (-not ($cfg.PSObject.Properties.Name -contains "CodeLanguages")) {
+        $cfg | Add-Member -NotePropertyName CodeLanguages -NotePropertyValue @("vba","python","powershell")
+    }
+    if (-not ($cfg.PSObject.Properties.Name -contains "RepoPrivacy")) {
+        $cfg | Add-Member -NotePropertyName RepoPrivacy -NotePropertyValue @{ Script="public"; Prompts="private"; Code="private" }
+    }
+    if (-not ($cfg.PSObject.Properties.Name -contains "RepoName")) {
+        $cfg | Add-Member -NotePropertyName RepoName -NotePropertyValue (Split-Path $cfg.PromptsRepoPath -Leaf)
+    }
+    return $cfg
+}
+
 
 $script:Config = $null
 $script:ConfigFile = Join-Path (Get-GitPromptScriptRoot) "gitprompt-config.json"
@@ -144,13 +195,21 @@ function Initialize-GitPromptSetup {
             '2' {
                 $url = Read-Host "Git URL"
                 $name = (Split-Path $url -Leaf) -replace '\.git$',''
-                $target = Join-Path (Split-Path $MyInvocation.PSCommandPath) $name
+                $defaultRoot = Get-GitPromptScriptRoot
+                $customRoot = Read-Host "Destination folder (ENTER for $defaultRoot)"
+                if ([string]::IsNullOrWhiteSpace($customRoot)) { $customRoot = $defaultRoot }
+                $target = Join-Path $customRoot $name
+                if (Test-Path $target) {
+                    Write-Warning "Le dossier existe deja: $target"
+                    $reuse = Read-Host "Utiliser ce dossier existant? (Y/N)"
+                    if ($reuse.ToUpperInvariant() -eq 'Y') { $repoPath = $target; break }
+                }
                 git clone $url $target
                 if ($LASTEXITCODE -eq 0) { $repoPath = $target }
             }
             '3' {
                 $name = Read-Host "Folder Name"
-                $repoPath = Join-Path (Split-Path $MyInvocation.PSCommandPath) $name
+                $repoPath = Join-Path (Get-GitPromptScriptRoot) $name
                 New-Item -ItemType Directory -Path $repoPath -Force | Out-Null
             }
             default {
@@ -169,20 +228,82 @@ function Initialize-GitPromptSetup {
         RepoName = Split-Path $repoPath -Leaf
         Domains  = @('strategy', 'coding', 'ops', 'trading')
         Version  = "7.5.0"
+        ScriptRepoPath = $repoPath
+        PromptsRepoPath = $repoPath
+        CodeRepoPath = ""
+        CodeLanguages = @("vba","python","powershell")
+        RepoPrivacy = @{ Script="public"; Prompts="private"; Code="private" }
     }
     Export-GitPromptConfiguration
 }
 
+function Initialize-MultiRepoSetup {
+    [CmdletBinding(SupportsShouldProcess)]
+    param()
+    Write-Box "MULTI-REPO SETUP" @(
+      "Repo A = script (code)",
+      "Repo B = prompts (domains)",
+      "Repo C = code snippets (by language)"
+    )
+
+    $defaultScript = Get-GitPromptScriptRoot
+    $scriptPath = Read-Host "Repo A path (ENTER for $defaultScript)"
+    if ([string]::IsNullOrWhiteSpace($scriptPath)) { $scriptPath = $defaultScript }
+    $promptsPath = Read-Host "Repo B path (prompts)"
+    $codePath = Read-Host "Repo C path (code)"
+
+    $scriptPrivacy = Read-Host "Repo A visibility (public/private) [public]"
+    if ([string]::IsNullOrWhiteSpace($scriptPrivacy)) { $scriptPrivacy = "public" }
+    $promptsPrivacy = Read-Host "Repo B visibility (public/private) [private]"
+    if ([string]::IsNullOrWhiteSpace($promptsPrivacy)) { $promptsPrivacy = "private" }
+    $codePrivacy = Read-Host "Repo C visibility (public/private) [private]"
+    if ([string]::IsNullOrWhiteSpace($codePrivacy)) { $codePrivacy = "private" }
+
+    $langsInput = Read-Host "Repo C languages (comma-separated) [vba,python,powershell]"
+    $langs = if ([string]::IsNullOrWhiteSpace($langsInput)) { @("vba","python","powershell") } else { @($langsInput -split "[,;\s]+" | Where-Object { $_ }) }
+
+    $create = Read-Host "Create missing folders? (Y/N) [Y]"
+    $doCreate = $true
+    if (-not [string]::IsNullOrWhiteSpace($create) -and $create.ToUpperInvariant() -ne "Y") { $doCreate = $false }
+
+    if ($doCreate) {
+        if ($promptsPath -and -not (Test-Path $promptsPath)) { New-Item -ItemType Directory -Path $promptsPath -Force | Out-Null }
+        if ($promptsPath) {
+            Push-Location $promptsPath
+            try { Initialize-DomainFolder $promptsPath } finally { Pop-Location }
+        }
+        if ($codePath -and -not (Test-Path $codePath)) { New-Item -ItemType Directory -Path $codePath -Force | Out-Null }
+        foreach ($l in $langs) {
+            if ($codePath) { New-Item -ItemType Directory -Path (Join-Path $codePath $l) -Force | Out-Null }
+        }
+    }
+
+    $script:Config = @{
+        RepoPath = $promptsPath
+        RepoName = if ($promptsPath) { Split-Path $promptsPath -Leaf } else { "" }
+        Domains  = @('strategy', 'coding', 'ops', 'trading')
+        Version  = "7.5.0"
+        ScriptRepoPath = $scriptPath
+        PromptsRepoPath = $promptsPath
+        CodeRepoPath = $codePath
+        CodeLanguages = $langs
+        RepoPrivacy = @{ Script=$scriptPrivacy; Prompts=$promptsPrivacy; Code=$codePrivacy }
+    }
+    Export-GitPromptConfiguration
+}
 function Import-GitPromptConfiguration {
     if (Test-Path $script:ConfigFile) {
         try {
             $script:Config = Get-Content -Path $script:ConfigFile -Raw | ConvertFrom-Json
+            $script:Config = ConvertTo-GitPromptConfig $script:Config
         } catch {
             Write-Warning "Config corrupt. Re-running setup..."
             Initialize-GitPromptSetup
+            $script:Config = ConvertTo-GitPromptConfig $script:Config
         }
     } else {
         Initialize-GitPromptSetup
+        $script:Config = ConvertTo-GitPromptConfig $script:Config
     }
 }
 
@@ -191,7 +312,8 @@ function Import-GitPromptConfiguration {
 # INITIALIZATION
 # ==========================================
 Import-GitPromptConfiguration
-if ($script:Config.RepoPath) { Set-Location $script:Config.RepoPath }
+$promptsRepoRoot = Get-PromptsRepoRoot
+if ($promptsRepoRoot) { Set-Location $promptsRepoRoot }
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
@@ -539,12 +661,13 @@ function Invoke-RepoScanner {
   $confirmAll = Read-Host "Confirm"
   if ($confirmAll -ne "DELETE") { return }
 
-  $scriptRoot = Get-GitPromptScriptRoot
-  $configRoot = $script:Config.RepoPath
+  $scriptRoot = Get-ScriptRepoRoot
+  $configRoot = Get-PromptsRepoRoot
+  $codeRoot = Get-CodeRepoRoot
 
   foreach ($repo in $selected | Select-Object -Unique) {
     if (-not (Test-Path $repo -PathType Container)) { continue }
-    if ($repo -eq $scriptRoot -or $repo -eq $configRoot) {
+    if ($repo -eq $scriptRoot -or $repo -eq $configRoot -or ($codeRoot -and $repo -eq $codeRoot)) {
       Write-Warning "Skipping protected repo: $repo"
       $confirm = Read-Host "Type DELETE to remove anyway"
       if ($confirm -ne "DELETE") { continue }
@@ -778,8 +901,6 @@ function Read-TextFromPaste([string]$label){
   $timeout = [TimeSpan]::FromMinutes(5)
 
   while ($true){
-    Set-Location $script:Config.RepoPath
-
     if ((Get-Date) - $startTime -gt $timeout) {
       throw 'Paste timeout exceeded (5 minutes)'
     }
@@ -2458,17 +2579,24 @@ function Get-CommitMessage-Interactive {
 
 function Invoke-Menu([string]$repoRoot){
   while($true){
-    Set-Location $script:Config.RepoPath
+    $scriptRoot = Get-ScriptRepoRoot
+    $promptsRoot = Get-PromptsRepoRoot
+    $codeRoot = Get-CodeRepoRoot
+    $repoRoot = $promptsRoot
+    if ($promptsRoot) { Set-Location $promptsRoot }
 
     $originUrl = $null
     try {
-      $originUrl = & git config --get remote.origin.url 2>$null
+      if ($promptsRoot) { $originUrl = & git -C $promptsRoot config --get remote.origin.url 2>$null }
       if ([string]::IsNullOrWhiteSpace($originUrl)) { $originUrl = $null }
     } catch { $originUrl = $null }
-
+    $originDisplay = if ($originUrl) { $originUrl } else { "not set" }
+    $codeDisplay = if ($codeRoot) { $codeRoot } else { "not set" }
     Write-Box "PROMPT-LAB v7.5 (Enterprise)" @(
-      ("Repo: {0}" -f $repoRoot),
-      ("Origin: {0}" -f ($originUrl ? $originUrl : "not set")),
+      ("Script Repo: {0}" -f $scriptRoot),
+      ("Prompts Repo: {0}" -f $promptsRoot),
+      ("Code Repo: {0}" -f $codeDisplay),
+      ("Origin: {0}" -f $originDisplay),
       "1) Sync / Update Prompt",
       "2) Bump Version",
       "3) Rollback to version",
@@ -2563,14 +2691,15 @@ function Invoke-Menu([string]$repoRoot){
         }
 
         "5" { Test-GitDoctor $repoRoot }
-        "6" { Update-GitPromptScript -repoRoot $repoRoot }
+        "6" { Update-GitPromptScript -repoRoot $scriptRoot }
         "7" { Invoke-RepoScanner }
         "8" {
           Write-Box "ADMIN / SETUP" @(
             "1) First-run setup wizard",
             "2) Clone repo (URL)",
-            "3) Set repo path manually",
+            "3) Set prompts repo path",
             "4) Show current config",
+            "5) Multi-repo setup",
             "0) Back"
           )
           $ac = Read-Host "Choix"
@@ -2584,24 +2713,35 @@ function Invoke-Menu([string]$repoRoot){
               if ([string]::IsNullOrWhiteSpace($customRoot)) { $customRoot = $defaultRoot }
               $target = Join-Path $customRoot $name
               if (Test-Path $target) {
-                Write-Warning "Le dossier existe déjà: $target"
+                Write-Warning "Le dossier existe deja: $target"
                 $reuse = Read-Host "Utiliser ce dossier existant? (Y/N)"
                 if ($reuse.ToUpperInvariant() -eq "Y") {
-                  $script:Config = @{ RepoPath = $target; RepoName = Split-Path $target -Leaf; Domains = @("strategy","coding","ops","trading"); Version = "7.5.0" }
+                  $script:Config = ConvertTo-GitPromptConfig $script:Config
+                  $script:Config.ScriptRepoPath = Get-ScriptRepoRoot
+                  $script:Config.PromptsRepoPath = $target
+                  $script:Config.RepoPath = $target
+                  $script:Config.RepoName = Split-Path $target -Leaf
                   Export-GitPromptConfiguration
                   break
                 }
               }
               git clone $url $target
               if ($LASTEXITCODE -eq 0) {
-                $script:Config = @{ RepoPath = $target; RepoName = Split-Path $target -Leaf; Domains = @("strategy","coding","ops","trading"); Version = "7.5.0" }
+                $script:Config = ConvertTo-GitPromptConfig $script:Config
+                $script:Config.ScriptRepoPath = Get-ScriptRepoRoot
+                $script:Config.PromptsRepoPath = $target
+                $script:Config.RepoPath = $target
+                $script:Config.RepoName = Split-Path $target -Leaf
                 Export-GitPromptConfiguration
               }
             }
             "3" {
-              $newPath = Read-Host "Repo path"
+              $newPath = Read-Host "Prompts repo path"
               if (-not [string]::IsNullOrWhiteSpace($newPath)) {
-                $script:Config = @{ RepoPath = $newPath; RepoName = Split-Path $newPath -Leaf; Domains = @("strategy","coding","ops","trading"); Version = "7.5.0" }
+                $script:Config = ConvertTo-GitPromptConfig $script:Config
+                $script:Config.PromptsRepoPath = $newPath
+                $script:Config.RepoPath = $newPath
+                $script:Config.RepoName = Split-Path $newPath -Leaf
                 Export-GitPromptConfiguration
               }
             }
@@ -2610,6 +2750,7 @@ function Invoke-Menu([string]$repoRoot){
               $script:Config | Format-List | Out-String | Write-Host
               Read-Host "Press ENTER to continue" | Out-Null
             }
+            "5" { Initialize-MultiRepoSetup }
             default { }
           }
         }
@@ -2627,16 +2768,16 @@ function Invoke-Menu([string]$repoRoot){
 # ==========================================
 if ($MyInvocation.InvocationName -eq '.') { return }
 try {
-  $repoRoot = $script:Config.RepoPath
+  $repoRoot = Get-PromptsRepoRoot
   if (-not $repoRoot) {
       Import-GitPromptConfiguration
-      $repoRoot = $script:Config.RepoPath
+      $repoRoot = Get-PromptsRepoRoot
   }
 
   # Sécurité : Si toujours pas de repoRoot après load, on force le wizard
   if (-not $repoRoot) {
       Initialize-GitPromptSetup
-      $repoRoot = $script:Config.RepoPath
+      $repoRoot = Get-PromptsRepoRoot
   }
 
   Initialize-DomainFolder $repoRoot

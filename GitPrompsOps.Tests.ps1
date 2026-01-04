@@ -3,6 +3,7 @@
 $script:backupConfig = $null
 $script:scriptPath = $null
 $script:configPath = $null
+$script:sharedRoot = $null
 
 Describe 'GitPromptOps core helpers' {
   BeforeAll {
@@ -17,13 +18,27 @@ Describe 'GitPromptOps core helpers' {
       (Get-Location).Path
     }
     $script:scriptPath = Join-Path $testRoot 'GitPromptOps.ps1'
-    $script:configPath = Join-Path $testRoot 'gitprompt-config.json'
+    if (-not (Test-Path $script:scriptPath)) {
+      $candidate = @(
+        (Join-Path $testRoot 'GitPromptOps\GitPromptOps.ps1'),
+        (Join-Path (Split-Path $testRoot -Parent) 'GitRepo\GitPromptOps\GitPromptOps.ps1')
+      ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+      if ($candidate) { $script:scriptPath = $candidate }
+    }
+    if (-not (Test-Path $script:scriptPath)) {
+      throw "GitPromptOps.ps1 not found for tests."
+    }
+    $scriptRoot = Split-Path -Parent $script:scriptPath
+    $script:configPath = Join-Path $scriptRoot 'gitprompt-config.json'
 
     if (Test-Path $script:configPath) {
       $script:backupConfig = Get-Content -Raw -Path $script:configPath -ErrorAction SilentlyContinue
     }
 
-    $repoRoot = Join-Path $TestDrive 'repo'
+    if (-not $script:sharedRoot) {
+      $script:sharedRoot = Join-Path $env:TEMP ("GitPromptOpsTests_" + [guid]::NewGuid().ToString('N'))
+    }
+    $repoRoot = $script:sharedRoot
     New-Item -ItemType Directory -Path $repoRoot -Force | Out-Null
     New-Item -ItemType Directory -Path (Join-Path $repoRoot 'prompts') -Force | Out-Null
     foreach ($d in @('strategy','coding','ops','trading')) {
@@ -38,23 +53,22 @@ Describe 'GitPromptOps core helpers' {
     } | ConvertTo-Json -Depth 4
     Set-Content -Path $script:configPath -Value $config -Encoding UTF8
 
-    . $script:scriptPath
+    function Clear-Host { }
+    Push-Location $scriptRoot
+    try {
+      . $script:scriptPath
+    } finally {
+      Pop-Location
+      Remove-Item -Path function:Clear-Host -ErrorAction SilentlyContinue
+    }
+    $script:ConfigFile = $script:configPath
+    $script:Config = Get-Content -Path $script:configPath -Raw | ConvertFrom-Json
 
     Set-Variable -Name Version -Value '0.2.0' -Scope Script
     Set-Variable -Name Yes -Value $true -Scope Script
     Set-Variable -Name Force -Value $true -Scope Script
     Set-Variable -Name NormalizeEol -Value $false -Scope Script
     Set-Variable -Name DryRun -Value $false -Scope Script
-  }
-
-  AfterAll {
-    $backupVar = Get-Variable -Name backupConfig -Scope Script -ErrorAction SilentlyContinue
-    $backupValue = if ($backupVar) { $backupVar.Value } else { $null }
-    if ($null -ne $backupValue) {
-      Set-Content -Path $script:configPath -Value $backupValue -Encoding UTF8
-    } else {
-      Remove-Item -Path $script:configPath -Force -ErrorAction SilentlyContinue
-    }
   }
 
   It 'ConvertTo-Slug normalizes input' {
@@ -102,11 +116,15 @@ Describe 'GitPromptOps core helpers' {
 "@
     $path = Join-Path $script:Config.RepoPath 'prompts\ops\OPS__sample__v0.1.0.md'
     Set-Content -Path $path -Value $prompt -Encoding UTF8
-
-    $inv = Get-PromptsInventory $script:Config.RepoPath
-    $indexPath = Build-Index $script:Config.RepoPath $inv
-    Test-Path $indexPath | Should -BeTrue
-    (Get-Content -Raw -Path $indexPath) | Should -Match 'sample'
+    Push-Location $script:Config.RepoPath
+    try {
+      $inv = Get-PromptsInventory $script:Config.RepoPath
+      $indexPath = Build-Index $script:Config.RepoPath $inv
+      Test-Path $indexPath | Should -BeTrue
+      (Get-Content -Raw -Path $indexPath) | Should -Match 'sample'
+    } finally {
+      Pop-Location
+    }
   }
 
   It 'Get-PromptsInventory skips README and invalid file names' {
@@ -118,9 +136,14 @@ Describe 'GitPromptOps core helpers' {
     Set-Content -Path $readme -Value 'readme' -Encoding UTF8
     Set-Content -Path $invalid -Value 'bad' -Encoding UTF8
 
-    $inv = Get-PromptsInventory $repoRoot
-    @($inv | Where-Object { $_.Slug -eq 'inv' -and $_.Domain -eq 'ops' }).Count | Should -Be 1
-    @($inv | Where-Object { $_.Path -eq $invalid }).Count | Should -Be 0
+    Push-Location $repoRoot
+    try {
+      $inv = Get-PromptsInventory $repoRoot
+      @($inv | Where-Object { $_.Slug -eq 'inv' -and $_.Domain -eq 'ops' }).Count | Should -Be 1
+      @($inv | Where-Object { $_.Path -eq $invalid }).Count | Should -Be 0
+    } finally {
+      Pop-Location
+    }
   }
 
   It 'Resolve-TargetPromptPath returns selected prompt when multiple versions' {
@@ -522,12 +545,13 @@ Describe 'GitPromptOps config and setup (mocked)' {
     }
   }
 
-  It 'Initialize-GitPromptSetup handles empty scan then falls back to option 3' {
-    $repoRoot = $script:Config.RepoPath
-    $cfgPath = Join-Path $repoRoot 'config.setup.scan.json'
+  It 'Initialize-GitPromptSetup selects repo from scan (option 1)' {
+    $cfgPath = Join-Path $TestDrive 'config.setup.scan.json'
     $script:ConfigFile = $cfgPath
-    $script:rhResponses = @('1','3','scanfallback')
-    $createdRepo = Join-Path (Split-Path $script:scriptPath -Parent) 'scanfallback'
+    $repoRoot = Join-Path $TestDrive 'scanrepo'
+    New-Item -ItemType Directory -Path $repoRoot -Force | Out-Null
+    $fake = [pscustomobject]@{ Parent = [pscustomobject]@{ FullName = $repoRoot } }
+    $script:rhResponses = @('1','1')
     function Read-Host {
       param([string]$p)
       if (-not $script:rhResponses -or $script:rhResponses.Count -eq 0) { return '' }
@@ -540,18 +564,61 @@ Describe 'GitPromptOps config and setup (mocked)' {
       return $value
     }
     function Clear-Host { }
-    function Start-Sleep { param([int]$Seconds) }
-    Set-Item -Path function:Get-ChildItem -Value { @() } -Force
+    Set-Item -Path function:Get-ChildItem -Value { @($fake) } -Force
     try {
       Initialize-GitPromptSetup
       Test-Path $cfgPath | Should -BeTrue
+      $script:Config.RepoPath | Should -Be $repoRoot
     } finally {
       Remove-Item -Path function:Get-ChildItem -ErrorAction SilentlyContinue
       Remove-Item -Path function:Read-Host -ErrorAction SilentlyContinue
       Remove-Item -Path function:Clear-Host -ErrorAction SilentlyContinue
-      Remove-Item -Path function:Start-Sleep -ErrorAction SilentlyContinue
       Remove-Item -Path $cfgPath -Force -ErrorAction SilentlyContinue
-      Remove-Item -Path $createdRepo -Recurse -Force -ErrorAction SilentlyContinue
+    }
+  }
+
+  It 'Initialize-GitPromptSetup clones repo when option 2 is selected' {
+    $cfgPath = Join-Path $TestDrive 'config.setup.clone.json'
+    $script:ConfigFile = $cfgPath
+    $script:rhResponses = @('2','https://example.com/demo-repo.git')
+    $script:capturedGitArgs = $null
+    function Read-Host {
+      param([string]$p)
+      if (-not $script:rhResponses -or $script:rhResponses.Count -eq 0) { return '' }
+      $value = $script:rhResponses[0]
+      if ($script:rhResponses.Count -gt 1) {
+        $script:rhResponses = $script:rhResponses[1..($script:rhResponses.Count-1)]
+      } else {
+        $script:rhResponses = @()
+      }
+      return $value
+    }
+    function Clear-Host { }
+    $orig = Get-Command git -ErrorAction SilentlyContinue
+    $hadFunction = $orig -and $orig.CommandType -eq 'Function'
+    function git {
+      param([Parameter(ValueFromRemainingArguments=$true)][string[]]$args)
+      $script:capturedGitArgs = $args
+      if ($args[0] -eq 'clone' -and $args.Count -ge 3) {
+        New-Item -ItemType Directory -Path $args[2] -Force | Out-Null
+      }
+      $global:LASTEXITCODE = 0
+    }
+    try {
+      Initialize-GitPromptSetup
+      Test-Path $cfgPath | Should -BeTrue
+      $scriptRoot = Split-Path -Parent $script:scriptPath
+      $script:Config.RepoPath | Should -Be (Join-Path $scriptRoot 'demo-repo')
+      ($script:capturedGitArgs -join ' ') | Should -Match 'clone'
+    } finally {
+      Remove-Item -Path function:Read-Host -ErrorAction SilentlyContinue
+      Remove-Item -Path function:Clear-Host -ErrorAction SilentlyContinue
+      if ($hadFunction) {
+        Set-Item -Path function:git -Value $orig.ScriptBlock -Force
+      } else {
+        Remove-Item -Path function:git -ErrorAction SilentlyContinue
+      }
+      Remove-Item -Path $cfgPath -Force -ErrorAction SilentlyContinue
     }
   }
 }
@@ -650,6 +717,7 @@ Describe 'GitPromptOps git setup (mocked)' {
       Set-Item -Path function:Confirm-GitIdentity -Value $origConfirm -Force
     }
   }
+
 }
 
 Describe 'GitPromptOps menu flows (mocked)' {
@@ -795,6 +863,64 @@ Describe 'GitPromptOps remaining utilities' {
       { Update-GitPromptScript -repoRoot $repoRoot } | Should -Throw
     } finally {
       $script:PSCommandPath = $orig
+    }
+  }
+
+  It 'Update-GitPromptScript commits when inputs are valid' {
+    $repoRoot = $script:Config.RepoPath
+    $tempScript = Join-Path $repoRoot 'GitPromptOps.ps1'
+    Set-Content -Path $tempScript -Value '# test' -Encoding UTF8
+    $origPath = $script:PSCommandPath
+    $script:PSCommandPath = $tempScript
+    $script:rhResponses = @('1','unit update','1','Y')
+    function Read-Host {
+      param([string]$p)
+      if (-not $script:rhResponses -or $script:rhResponses.Count -eq 0) { return '0' }
+      $value = $script:rhResponses[0]
+      if ($script:rhResponses.Count -gt 1) {
+        $script:rhResponses = $script:rhResponses[1..($script:rhResponses.Count-1)]
+      } else {
+        $script:rhResponses = @()
+      }
+      return $value
+    }
+    $orig = Get-Command git -ErrorAction SilentlyContinue
+    $hadFunction = $orig -and $orig.CommandType -eq 'Function'
+    function git { param([Parameter(ValueFromRemainingArguments=$true)][string[]]$args) ' M promptlab.ps1' }
+    $origCommit = (Get-Command Invoke-GitCommitPush).ScriptBlock
+    $script:commitMessage = $null
+    Set-Item -Path function:Invoke-GitCommitPush -Value {
+      param([string]$repoRoot, [string[]]$pathsToStage, [string]$message)
+      $script:commitMessage = $message
+    } -Force
+    try {
+      Update-GitPromptScript -repoRoot $repoRoot
+      $script:commitMessage | Should -Match '^fix\(script\): unit update'
+    } finally {
+      $script:PSCommandPath = $origPath
+      Remove-Item -Path function:Read-Host -ErrorAction SilentlyContinue
+      Set-Item -Path function:Invoke-GitCommitPush -Value $origCommit -Force
+      if ($hadFunction) {
+        Set-Item -Path function:git -Value $orig.ScriptBlock -Force
+      } else {
+        Remove-Item -Path function:git -ErrorAction SilentlyContinue
+      }
+      Remove-Item -Path $tempScript -Force -ErrorAction SilentlyContinue
+    }
+  }
+}
+
+Describe 'GitPromptOps test cleanup' {
+  AfterAll {
+    $backupVar = Get-Variable -Name backupConfig -Scope Script -ErrorAction SilentlyContinue
+    $backupValue = if ($backupVar) { $backupVar.Value } else { $null }
+    if ($null -ne $backupValue) {
+      Set-Content -Path $script:configPath -Value $backupValue -Encoding UTF8
+    } else {
+      Remove-Item -Path $script:configPath -Force -ErrorAction SilentlyContinue
+    }
+    if ($script:sharedRoot -and (Test-Path $script:sharedRoot)) {
+      Remove-Item -Path $script:sharedRoot -Recurse -Force -ErrorAction SilentlyContinue
     }
   }
 }
