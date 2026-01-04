@@ -1,15 +1,31 @@
 # Prompts & Code Index
 
-Generated: 2026-01-04 22:46:34
-Total prompts: 0
+Generated: 2026-01-05 00:19:14
+Total prompts: 13
 
+## ops
+
+| Slug | Version | Size | Last Modified | File |
+|---|---:|---:|---|---|
+| backup | 0.1.0 | 0 KB | 2026-01-05 | `prompts/ops/OPS__backup__v0.1.0.md` |
+| bumpme_8de27e | 0.2.0 | 0,06 KB | 2026-01-05 | `prompts/ops/OPS__bumpme_8de27e__v0.2.0.md` |
+| bumpme_a98ce5 | 0.2.0 | 0,06 KB | 2026-01-05 | `prompts/ops/OPS__bumpme_a98ce5__v0.2.0.md` |
+| bumpme_e57f93 | 0.2.0 | 0,06 KB | 2026-01-05 | `prompts/ops/OPS__bumpme_e57f93__v0.2.0.md` |
+| newonly_6a43e2 | 0.3.0 | 0,06 KB | 2026-01-05 | `prompts/ops/OPS__newonly_6a43e2__v0.3.0.md` |
+| newonly_b4ae25 | 0.3.0 | 0,06 KB | 2026-01-05 | `prompts/ops/OPS__newonly_b4ae25__v0.3.0.md` |
+| newonly_bdd726 | 0.3.0 | 0,06 KB | 2026-01-05 | `prompts/ops/OPS__newonly_bdd726__v0.3.0.md` |
+| read | 0.1.0 | 0,01 KB | 2026-01-05 | `prompts/ops/OPS__read__v0.1.0.md` |
+| rollback_161afb | 0.3.0 | 0,14 KB | 2026-01-05 | `prompts/ops/OPS__rollback_161afb__v0.3.0.md` |
+| rollback_dcbb5a | 0.3.0 | 0,14 KB | 2026-01-05 | `prompts/ops/OPS__rollback_dcbb5a__v0.3.0.md` |
+| rollback_ead42d | 0.3.0 | 0,14 KB | 2026-01-05 | `prompts/ops/OPS__rollback_ead42d__v0.3.0.md` |
+| sel | 0.1.0 | 0 KB | 2026-01-05 | `prompts/ops/OPS__sel__v0.1.0.md` |
+| unit | 0.1.0 | 0,04 KB | 2026-01-05 | `prompts/ops/OPS__unit__v0.1.0.md` |
 
 ## [TOOL] Code Projects & Scripts
 
 | Type | File | Size | Last Modified |
 |---|---|---:|---|
-| PowerShell | `GitPrompsOps.Tests.ps1` | 27,71 KB | 2026-01-04 |
-| PowerShell | `GitPromptOps.ps1` | 88,01 KB | 2026-01-04 |
+| PowerShell | `GitPrompsOps.Tests.ps1` | 37,3 KB | 2026-01-05 |
 | PowerShell | `promptlab.ps1` | 71,62 KB | 2026-01-03 |
 
 ---
