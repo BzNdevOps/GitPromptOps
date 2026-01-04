@@ -1183,6 +1183,46 @@ function Confirm-GitIdentity {
   }
 }
 
+function Set-GitRemoteOrigin {
+  [CmdletBinding(SupportsShouldProcess)]
+  param(
+    [Parameter(Mandatory)][string]$repoRoot,
+    [Parameter()][string]$repoName,
+    [Parameter()][string]$suggestedOwner
+  )
+
+  $name = if ($repoName) { $repoName } else { Split-Path $repoRoot -Leaf }
+  $owner = if ($suggestedOwner) { $suggestedOwner } else { "user" }
+  $ownerInput = Read-Host "Git owner/user [$owner]"
+  if (-not [string]::IsNullOrWhiteSpace($ownerInput)) { $owner = $ownerInput }
+
+  Write-Host ""
+  Write-Host "Remote type:" -ForegroundColor Yellow
+  Write-Host "[1] GitHub HTTPS" -ForegroundColor Cyan
+  Write-Host "[2] GitHub SSH" -ForegroundColor Cyan
+  Write-Host "[3] Custom URL" -ForegroundColor Cyan
+  $typeChoice = Read-Host "Choix (1-3)"
+
+  $url = switch ($typeChoice) {
+    "1" { "https://github.com/$owner/$name.git" }
+    "2" { "git@github.com:$owner/$name.git" }
+    "3" { Read-Host "Remote URL" }
+    default { "https://github.com/$owner/$name.git" }
+  }
+
+  if ([string]::IsNullOrWhiteSpace($url)) { throw "Remote URL vide." }
+
+  if ($PSCmdlet.ShouldProcess($repoRoot, "Add remote origin ($url)")) {
+    Push-Location $repoRoot
+    try {
+      & git remote add origin $url 2>$null | Out-Null
+    } finally {
+      Pop-Location
+    }
+  }
+
+  Write-Ok "Remote ajouté: $url"
+}
 
 
 # =====================================================
@@ -1425,6 +1465,23 @@ Thumbs.db
       } else {
         Write-Warn "⚠️  Noe remote GitHub/GitLab configuré (local seulement)"
         Write-Host "   💡 Pour ajouter: git remote add origin <URL>" -ForegroundColor Cyan
+        if ($Yes -or (Read-YesNo "   🔧 Configurer origin maintenant? (Y/N)")) {
+          $email = & git config --global user.email 2>$null
+          $suggestedOwner = $null
+          if ($email -match '^([^@]+)@') { $suggestedOwner = $matches[1] }
+          $repoName = if ($script:Config -and $script:Config.RepoName) { $script:Config.RepoName } else { Split-Path $repoRoot -Leaf }
+
+          if (-not [string]::IsNullOrWhiteSpace($RepoUrl)) {
+            if (Read-YesNo "   🔧 Utiliser RepoUrl ($RepoUrl) ? (Y/N)") {
+              & git remote add origin $RepoUrl 2>$null | Out-Null
+              Write-Ok "   [OK] Remote ajouté: $RepoUrl"
+            } else {
+              Set-GitRemoteOrigin -repoRoot $repoRoot -repoName $repoName -suggestedOwner $suggestedOwner
+            }
+          } else {
+            Set-GitRemoteOrigin -repoRoot $repoRoot -repoName $repoName -suggestedOwner $suggestedOwner
+          }
+        }
       }
     } catch {
       Write-Warn "⚠️  Unable to vérifier remote"
@@ -1433,60 +1490,50 @@ Thumbs.db
 
 
 # ========================================
-# CHECK 7: État du repo
+# CHECK 7: Etat du repo
 # ========================================
 if ($gitInitialized) {
   try {
-    Push-Location $repoRoot
-    $status = & git status --porcelain 2>$null
-    $statusExitCode = $LASTEXITCODE
-    Pop-Location
-
-    if ($statusExitCode -eq 0){
-      if ([string]::IsNullOrWhiteSpace($status)){
-        Write-Ok "[OK] Repo clean (Noe changement No commité)"
+    $statusResult = Invoke-Git $repoRoot "status --porcelain"
+    if ($statusResult.Code -eq 0) {
+      if ([string]::IsNullOrWhiteSpace($statusResult.Out)) {
+        Write-Ok "[OK] Repo clean (no uncommitted changes)"
       } else {
-        $fileCount = ($status -split "`n" | Where-Object {$_}).Count
-        Write-Warn "⚠️  Repo dirty: $fileCount fichier(s) modifié(s)"
+        $fileCount = @($statusResult.Out -split "`n" | Where-Object { $_ }).Count
+        Write-Warn ("??  Repo dirty: {0} file(s) modified" -f $fileCount)
 
-        if ($Yes -or (Read-YesNo "   🔧 Créer un commit initial? (Y/N)")) {
+        if ($Yes -or (Read-YesNo "   ?? Create an initial commit? (Y/N)")) {
           try {
             Push-Location $repoRoot
-
-            # Ajouter les fichiers
             & git add . 2>&1 | Out-Null
-
-            # Créer le commit en ignorant les warnings CRLF
             $commitMsg = "chore: initial prompt-lab setup"
-      $null = & git -c core.safecrlf=false commit -m "$commitMsg" 2>&1
+            $null = & git -c core.safecrlf=false commit -m "$commitMsg" 2>&1
             $commitExitCode = $LASTEXITCODE
-
             Pop-Location
-
             if ($commitExitCode -eq 0) {
-              Write-Ok "   [OK] Commit initial créé"
+              Write-Ok "   [OK] Initial commit created"
               $fixed += "Initial commit"
             } else {
-              Write-Fail "   ✗ Échec commit"
-              Write-Info "   💡 Essaie manuellement: git add . && git -c core.safecrlf=false commit -m 'init'"
+              Write-Fail "   ? Commit failed"
+              Write-Info "   ?? Try: git add . && git -c core.safecrlf=false commit -m init"
             }
           } catch {
-            try { Pop-Location } catch { Write-Verbose "Pop-Location failed: $($_.Exception.Message)" }
-            Write-Fail "   ✗ Erreur: $($_.Exception.Message)"
+            try { Pop-Location } catch { Write-Verbose ("Pop-Location failed: {0}" -f $_.Exception.Message) }
+            Write-Fail ("   ? Error: {0}" -f $_.Exception.Message)
           }
         }
       }
+    } else {
+      $errText = if ([string]::IsNullOrWhiteSpace($statusResult.Err)) { "unknown error" } else { $statusResult.Err }
+      Write-Warn ("??  Unable to verify repo status: {0}" -f $errText)
     }
   } catch {
-    Write-Warn "⚠️  Unable to vérifier l'état du repo"
+    Write-Warn ("??  Unable to verify repo status: {0}" -f $_.Exception.Message)
   }
 }
-
-
-
-  # ========================================
-  # CHECK 8: README.md existe
-  # ========================================
+# ========================================
+# CHECK 8: README.md existe
+# ========================================
   $readmePath = Join-Path $repoRoot "README.md"
   if (-not (Test-Path $readmePath)) {
     $issues += "README.md manquant"
