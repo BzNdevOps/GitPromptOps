@@ -1,0 +1,25 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "PowerShell: Launch GitPromptOps.ps1",
+      "type": "PowerShell",
+      "request": "launch",
+      "script": "${workspaceFolder}/GitPromptOps.ps1",
+      "cwd": "${workspaceFolder}",
+      "args": [],
+      "breakOnEntry": false,
+      "createTemporaryIntegratedConsole": false
+    },
+    {
+      "name": "PowerShell: Launch Current File",
+      "type": "PowerShell",
+      "request": "launch",
+      "script": "${file}",
+      "cwd": "${fileDirname}",
+      "args": [],
+      "breakOnEntry": false,
+      "createTemporaryIntegratedConsole": false
+    }
+  ]
+}
