@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     GitPrompt-Ops v7.5 (Enterprise Edition)
 .DESCRIPTION
@@ -2387,7 +2387,8 @@ function Update-GitPromptScript {
   $commitMsg = Read-Host "Description courte (ex: correction Invoke-GitCommitPush CRLF)"
 
   if ([string]::IsNullOrWhiteSpace($commitMsg)) {
-    throw "Message de commit vide"
+    $commitMsg = "update script"
+    Write-Warn "Message vide: utilisation du message par defaut '$commitMsg'"
   }
 
   $fullCommitMsg = "$commitType(script): $commitMsg"
@@ -2396,9 +2397,9 @@ function Update-GitPromptScript {
   Write-Host ""
   Write-Host "Bumper la version du script?" -ForegroundColor Yellow
   Write-Host "[1] No - Garder la Current Version" -ForegroundColor Cyan
-  Write-Host "[2] Patch - v2.1.0 → v2.1.1" -ForegroundColor Cyan
-  Write-Host "[3] Minor - v2.1.0 → v2.2.0" -ForegroundColor Cyan
-  Write-Host "[4] Major - v2.1.0 → v3.0.0" -ForegroundColor Cyan
+  Write-Host "[2] Patch - v2.2.0 → v2.1.1" -ForegroundColor Cyan
+  Write-Host "[3] Minor - v2.2.0 → v2.2.0" -ForegroundColor Cyan
+  Write-Host "[4] Major - v2.2.0 → v3.0.0" -ForegroundColor Cyan
   Write-Host ""
 
   $versionChoice = Read-Host "Choix (1-4)"
@@ -2868,6 +2869,7 @@ try {
   Write-Fail $_.Exception.Message
   exit 1
 }
+
 
 
 
