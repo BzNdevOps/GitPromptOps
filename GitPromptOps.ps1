@@ -1778,7 +1778,7 @@ function Update-PromptVersion {
   $newFile = ("{0}__{1}__v{2}.md" -f $prefix, $slug, (Format-Version $newV))
   $dest = Join-Path $repoRoot ("prompts\{0}\{1}" -f $domain, $newFile)
 
-  if (Test-Path $dest -and -not $Force){
+  if ((Test-Path $dest) -and -not $Force){
     throw "Le fichier bump existe déjà: $dest (utilise -Force)."
   }
 
